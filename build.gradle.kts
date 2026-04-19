@@ -10,16 +10,16 @@ buildscript {
         maven("https://jitpack.io")
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.3.2")
+        classpath("com.android.tools.build:gradle:8.7.3")
 classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
-classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21")
+classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.21")
     }
 }
 
 subprojects {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
         compilerOptions {
-            freeCompilerArgs.add("-Xannotation-default-target=param-property")
+            
         }
     }
 }
