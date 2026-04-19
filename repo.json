@@ -1,0 +1,8 @@
+{
+  "name": "HDPorner Provider",
+  "description": "HDPorner - Free Premium Porn Videos",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/plugins.json"
+  ]
+}
