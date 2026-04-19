@@ -1,109 +1,110 @@
-name: Build CloudStream Plugin
+name: Build and Release CloudStream Extension
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        
-    - name: Set up JDK 21
-      uses: actions/setup-java@v4
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-      
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '8.10.2'
-        
-    - name: Create Gradle Wrapper
-      run: |
-        gradle wrapper --gradle-version=8.10.2
-        chmod +x gradlew
-        
-    - name: Build with Gradle
-      run: ./gradlew build
-      
-    - name: Find and copy CS3 files
-      if: github.ref == 'refs/heads/main'
-      run: |
-        mkdir -p release
-        find . -name "*.cs3" -exec cp {} release/ \;
-        ls -la release/
-        
-    - name: Create plugin metadata
-      if: github.ref == 'refs/heads/main'
-      run: |
-        # Create plugins.json
-        cat > plugins.json << 'EOF'
-        [
-          {
-            "url": "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/HDPornerProvider.cs3",
-            "internalName": "HDPornerProvider",
-            "tvTypes": ["Movie", "Anime"],
-            "language": "en",
-            "name": "HDPorner",
-            "authors": ["senkuboy0-cyber"],
-            "version": 1,
-            "description": "HDPorner - Free Premium Porn Videos",
-            "repositoryUrl": "https://github.com/senkuboy0-cyber/HDPornerProvider",
-            "status": 1
-          }
-        ]
-        EOF
-        
-        # Create repo.json  
-        cat > repo.json << 'EOF'
-        {
-          "name": "HDPorner Provider",
-          "description": "HDPorner - Free Premium Porn Videos",
-          "manifestVersion": 1,
-          "pluginLists": [
-            "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/plugins.json"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build plugin
+        run: ./gradlew assembleRelease --stacktrace
+        continue-on-error: true
+
+      - name: Find CS3 file
+        id: find_cs3
+        run: |
+          CS3_FILE=$(find . -name "*.cs3" -type f | head -n 1)
+          if [ -z "$CS3_FILE" ]; then
+            echo "❌ No .cs3 file found!"
+            exit 1
+          fi
+          echo "✅ Found: $CS3_FILE"
+          echo "cs3_path=$CS3_FILE" >> $GITHUB_OUTPUT
+          echo "cs3_name=$(basename $CS3_FILE)" >> $GITHUB_OUTPUT
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp "${{ steps.find_cs3.outputs.cs3_path }}" "release/${{ steps.find_cs3.outputs.cs3_name }}"
+          echo "CS3_FILE_NAME=${{ steps.find_cs3.outputs.cs3_name }}" >> $GITHUB_ENV
+
+      - name: Generate plugins.json
+        run: |
+          cat > release/plugins.json << EOF
+          [
+            {
+              "url": "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/${{ steps.find_cs3.outputs.cs3_name }}",
+              "internalName": "HDPornerProvider",
+              "tvTypes": ["Movie", "Anime"],
+              "language": "en",
+              "name": "HDPorner",
+              "authors": ["senkuboy0-cyber"],
+              "version": 1,
+              "description": "HDPorner - Free Premium Porn Videos",
+              "repositoryUrl": "https://github.com/senkuboy0-cyber/HDPornerProvider",
+              "status": 1
+            }
           ]
-        }
-        EOF
-        
-    - name: Upload to builds branch
-      if: github.ref == 'refs/heads/main'
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        
-        # Store files temporarily
-        cp release/*.cs3 . 2>/dev/null || echo "No CS3 files found"
-        cp plugins.json repo.json /tmp/ 2>/dev/null || echo "No metadata files"
-        
-        # Switch to builds branch
-        git fetch origin builds || true
-        git checkout builds 2>/dev/null || git checkout -b builds
-        
-        # Copy files back
-        cp /tmp/*.cs3 . 2>/dev/null || echo "No CS3 to copy"
-        cp /tmp/plugins.json . 2>/dev/null || echo "No plugins.json"
-        cp /tmp/repo.json . 2>/dev/null || echo "No repo.json"
-        
-        # Commit and push
-        git add -A
-        git commit -m "Update build artifacts $(date)" || echo "No changes"
-        
-    - name: Push changes
-      if: github.ref == 'refs/heads/main'
-      uses: ad-m/github-push-action@master
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        branch: builds
-        force: true
+          EOF
+
+      - name: Generate repo.json
+        run: |
+          cat > release/repo.json << EOF
+          {
+            "name": "HDPorner Provider",
+            "description": "HDPorner - Free Premium Porn Videos",
+            "manifestVersion": 1,
+            "pluginLists": [
+              "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/plugins.json"
+            ]
+          }
+          EOF
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudstream-plugin
+          path: release/*
+
+      - name: Deploy to builds branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./release
+          publish_branch: builds
+          force_orphan: false
+          keep_files: true
+          commit_message: "🚀 Update build artifacts [skip ci]"
