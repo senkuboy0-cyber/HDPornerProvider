@@ -1,0 +1,98 @@
+name: Build CloudStream Plugin
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+      
+    - name: Build with Gradle
+      run: ./gradlew build
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts
+        path: |
+          **/*.cs3
+          **/build/outputs/**/*.apk
+        
+    - name: Prepare release files
+      if: github.ref == 'refs/heads/main'
+      run: |
+        mkdir -p release
+        find . -name "*.cs3" -exec cp {} release/ \;
+        
+    - name: Update builds branch
+      if: github.ref == 'refs/heads/main'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Create builds branch if not exists
+        git checkout -b builds || git checkout builds
+        
+        # Copy built files
+        cp release/*.cs3 . 2>/dev/null || echo "No .cs3 files found"
+        
+        # Create plugins.json
+        cat > plugins.json << 'EOF'
+        [
+          {
+            "url": "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/HDPornerProvider.cs3",
+            "internalName": "HDPornerProvider",
+            "tvTypes": ["Movie", "Anime"],
+            "language": "en",
+            "name": "HDPorner",
+            "authors": ["senkuboy0-cyber"],
+            "version": 1,
+            "description": "HDPorner - Free Premium Porn Videos",
+            "repositoryUrl": "https://github.com/senkuboy0-cyber/HDPornerProvider",
+            "status": 1
+          }
+        ]
+        EOF
+        
+        # Create repo.json
+        cat > repo.json << 'EOF'
+        {
+          "name": "HDPorner Provider",
+          "description": "HDPorner - Free Premium Porn Videos",
+          "manifestVersion": 1,
+          "pluginLists": [
+            "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/plugins.json"
+          ]
+        }
+        EOF
+        
+        git add -A
+        git commit -m "Update build artifacts" || echo "No changes to commit"
+        
+    - name: Push to builds branch
+      if: github.ref == 'refs/heads/main'
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        branch: builds
+        force: true
