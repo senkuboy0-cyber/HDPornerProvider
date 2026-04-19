@@ -1,72 +1,40 @@
-name: Build and Release CloudStream Extension
+name: Build & Deploy CloudStream Extension
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-java@v3
         with:
-          fetch-depth: 0
+          distribution: temurin
+          java-version: 17
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: gradle/actions/setup-gradle@v3
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          gradle-version: 8.13
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Make gradlew executable
-        run: chmod +x gradlew
-
-      - name: Build plugin
-        run: ./gradlew assembleRelease --stacktrace
-        continue-on-error: true
-
-      - name: Find CS3 file
-        id: find_cs3
+      - name: Build Extensions
         run: |
-          CS3_FILE=$(find . -name "*.cs3" -type f | head -n 1)
-          if [ -z "$CS3_FILE" ]; then
-            echo "❌ No .cs3 file found!"
-            exit 1
-          fi
-          echo "✅ Found: $CS3_FILE"
-          echo "cs3_path=$CS3_FILE" >> $GITHUB_OUTPUT
-          echo "cs3_name=$(basename $CS3_FILE)" >> $GITHUB_OUTPUT
+          for i in 1 2 3; do
+            gradle make && break || sleep 30
+          done
 
-      - name: Prepare release files
+      - name: Prepare builds folder
         run: |
-          mkdir -p release
-          cp "${{ steps.find_cs3.outputs.cs3_path }}" "release/${{ steps.find_cs3.outputs.cs3_name }}"
-          echo "CS3_FILE_NAME=${{ steps.find_cs3.outputs.cs3_name }}" >> $GITHUB_ENV
-
-      - name: Generate plugins.json
-        run: |
-          cat > release/plugins.json << EOF
+          mkdir -p builds
+          cp HDPornerProvider/build/HDPornerProvider.cs3 builds/
+          cat > builds/plugins.json << 'JSON'
           [
             {
-              "url": "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/${{ steps.find_cs3.outputs.cs3_name }}",
+              "url": "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/HDPornerProvider.cs3",
               "internalName": "HDPornerProvider",
               "tvTypes": ["Movie", "Anime"],
               "language": "en",
@@ -78,11 +46,8 @@ jobs:
               "status": 1
             }
           ]
-          EOF
-
-      - name: Generate repo.json
-        run: |
-          cat > release/repo.json << EOF
+          JSON
+          cat > builds/repo.json << 'JSON'
           {
             "name": "HDPorner Provider",
             "description": "HDPorner - Free Premium Porn Videos",
@@ -91,20 +56,11 @@ jobs:
               "https://raw.githubusercontent.com/senkuboy0-cyber/HDPornerProvider/builds/plugins.json"
             ]
           }
-          EOF
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cloudstream-plugin
-          path: release/*
+          JSON
 
       - name: Deploy to builds branch
-        uses: peaceiris/actions-gh-pages@v4
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./release
-          publish_branch: builds
-          force_orphan: false
-          keep_files: true
-          commit_message: "🚀 Update build artifacts [skip ci]"
+          branch: builds
+          folder: builds
+          clean: true
