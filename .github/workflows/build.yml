@@ -29,42 +29,24 @@ jobs:
       with:
         gradle-version: '8.10.2'
         
-    - name: Generate Gradle Wrapper
+    - name: Create Gradle Wrapper
       run: |
         gradle wrapper --gradle-version=8.10.2
+        chmod +x gradlew
         
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-      
     - name: Build with Gradle
       run: ./gradlew build
       
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-artifacts
-        path: |
-          **/*.cs3
-          **/build/outputs/**/*.apk
-        
-    - name: Prepare release files
+    - name: Find and copy CS3 files
       if: github.ref == 'refs/heads/main'
       run: |
         mkdir -p release
         find . -name "*.cs3" -exec cp {} release/ \;
+        ls -la release/
         
-    - name: Update builds branch
+    - name: Create plugin metadata
       if: github.ref == 'refs/heads/main'
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        
-        # Create builds branch if not exists
-        git checkout -b builds || git checkout builds
-        
-        # Copy built files
-        cp release/*.cs3 . 2>/dev/null || echo "No .cs3 files found"
-        
         # Create plugins.json
         cat > plugins.json << 'EOF'
         [
@@ -83,7 +65,7 @@ jobs:
         ]
         EOF
         
-        # Create repo.json
+        # Create repo.json  
         cat > repo.json << 'EOF'
         {
           "name": "HDPorner Provider",
@@ -95,10 +77,30 @@ jobs:
         }
         EOF
         
-        git add -A
-        git commit -m "Update build artifacts" || echo "No changes to commit"
+    - name: Upload to builds branch
+      if: github.ref == 'refs/heads/main'
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
         
-    - name: Push to builds branch
+        # Store files temporarily
+        cp release/*.cs3 . 2>/dev/null || echo "No CS3 files found"
+        cp plugins.json repo.json /tmp/ 2>/dev/null || echo "No metadata files"
+        
+        # Switch to builds branch
+        git fetch origin builds || true
+        git checkout builds 2>/dev/null || git checkout -b builds
+        
+        # Copy files back
+        cp /tmp/*.cs3 . 2>/dev/null || echo "No CS3 to copy"
+        cp /tmp/plugins.json . 2>/dev/null || echo "No plugins.json"
+        cp /tmp/repo.json . 2>/dev/null || echo "No repo.json"
+        
+        # Commit and push
+        git add -A
+        git commit -m "Update build artifacts $(date)" || echo "No changes"
+        
+    - name: Push changes
       if: github.ref == 'refs/heads/main'
       uses: ad-m/github-push-action@master
       with:
