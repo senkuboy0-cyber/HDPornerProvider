@@ -2,6 +2,8 @@ package com.hdporner
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import android.util.Base64
+import java.net.URLDecoder
 
 class HDPornerProvider : MainAPI() {
     override var mainUrl = "https://hdporner.me"
@@ -31,22 +33,20 @@ class HDPornerProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) {
-            request.data
-        } else {
-            if (request.data.contains("/c/")) {
-                request.data.replace("filter=latest", "page/$page?filter=latest")
-            } else {
-                request.data.replace("?filter=latest", "/page/$page?filter=latest").replace("filter=latest", "page/$page?filter=latest")
-            }
-        }
-        
+        val url = if (page == 1) request.data
+        else if (request.data.contains("/c/"))
+            request.data.replace("filter=latest", "page/$page?filter=latest")
+        else
+            request.data.replace("?filter=latest", "/page/$page?filter=latest")
+
         val doc = app.get(url, headers = ua).document
         val items = doc.select("article.post").mapNotNull { el ->
             val a = el.selectFirst("a[href]") ?: return@mapNotNull null
             val href = a.attr("abs:href").ifBlank { return@mapNotNull null }
             val title = (el.selectFirst("h2, h3")?.text() ?: a.attr("title")).trim().ifBlank { return@mapNotNull null }
-            val poster = el.selectFirst("img")?.let { it.attr("data-src").ifBlank { it.attr("src") } }
+            // logo skip করো, video thumbnail নাও
+            val poster = el.select("img").map { it.attr("src").ifBlank { it.attr("data-src") } }
+                .firstOrNull { it.contains("uploads") }
             newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
         }
         return newHomePageResponse(request.name, items, page < 10)
@@ -58,7 +58,8 @@ class HDPornerProvider : MainAPI() {
             val a = el.selectFirst("a[href]") ?: return@mapNotNull null
             val href = a.attr("abs:href").ifBlank { return@mapNotNull null }
             val title = (el.selectFirst("h2, h3")?.text() ?: a.attr("title")).trim().ifBlank { return@mapNotNull null }
-            val poster = el.selectFirst("img")?.let { it.attr("data-src").ifBlank { it.attr("src") } }
+            val poster = el.select("img").map { it.attr("src").ifBlank { it.attr("data-src") } }
+                .firstOrNull { it.contains("uploads") }
             newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
         }
     }
@@ -68,17 +69,29 @@ class HDPornerProvider : MainAPI() {
         val title = doc.selectFirst("h1")?.text()?.trim() ?: doc.title().trim()
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
         val description = doc.selectFirst("meta[name=description]")?.attr("content")
-        val embedUrl = doc.select("iframe[src]")
-            .map { it.attr("src") }
-            .firstOrNull {
-                it.contains("pornkx") || it.contains("minochinos") ||
-                it.contains("dood") || it.contains("streamtape") ||
-                it.contains("filemoon") || it.contains("vidhide")
-            } ?: doc.selectFirst("iframe")?.attr("src") ?: ""
-        return newMovieLoadResponse(title, url, TvType.Movie, embedUrl.ifBlank { url }) {
+
+        // iframe src থেকে base64 q parameter decode করে video URL বের করো
+        val iframeSrc = doc.selectFirst("iframe[src]")?.attr("src") ?: ""
+        val videoUrl = extractVideoUrl(iframeSrc)
+
+        return newMovieLoadResponse(title, url, TvType.Movie, videoUrl.ifBlank { url }) {
             this.posterUrl = poster
             this.plot = description
         }
+    }
+
+    private fun extractVideoUrl(iframeSrc: String): String {
+        if (iframeSrc.isBlank()) return ""
+        return try {
+            // q parameter টা base64 encoded
+            val q = iframeSrc.substringAfter("?q=").substringBefore("&")
+            val decoded = URLDecoder.decode(
+                String(Base64.decode(q, Base64.DEFAULT)), "UTF-8"
+            )
+            // decoded এ src="https://..." আছে
+            Regex("""src=["']([^"']+\.mp4[^"']*)["']""")
+                .find(decoded)?.groupValues?.get(1) ?: ""
+        } catch (e: Exception) { "" }
     }
 
     override suspend fun loadLinks(
@@ -88,19 +101,27 @@ class HDPornerProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (data.isBlank()) return false
-        if (data.contains("pornkx") || data.contains("minochinos")) {
-            val html = app.get(data, headers = ua).text
-            val hjkMatch = Regex("""[A-Za-z0-9+/=_\-]+\|(\d+)\|hjkrhuihghfvu\|([A-Za-z0-9+/=_\-]+)""")
-                .find(html) ?: return false
-            val fileId = Regex("""file_id['"]\s*,\s*['"](\d+)['"]""")
-                .find(html)?.groupValues?.get(1) ?: return false
-            val m3u8Url = "https://minochinos.com/stream/${hjkMatch.groupValues[2]}/hjkrhuihghfvu/${hjkMatch.groupValues[1]}/$fileId/master.m3u8"
-            callback(newExtractorLink(name, name, m3u8Url, ExtractorLinkType.M3U8) {
+
+        // Direct video URL
+        if (data.contains(".mp4") || data.contains("sv2.hdporner")) {
+            callback(newExtractorLink(name, name, data, ExtractorLinkType.VIDEO) {
                 this.quality = Qualities.P1080.value
-                this.referer = data
+                this.referer = mainUrl
+                this.headers = ua
             })
             return true
         }
-        return loadExtractor(data, subtitleCallback = subtitleCallback, callback = callback)
+
+        // Page URL হলে আবার parse করো
+        val doc = app.get(data, headers = ua).document
+        val iframeSrc = doc.selectFirst("iframe[src]")?.attr("src") ?: return false
+        val videoUrl = extractVideoUrl(iframeSrc).ifBlank { return false }
+
+        callback(newExtractorLink(name, name, videoUrl, ExtractorLinkType.VIDEO) {
+            this.quality = Qualities.P1080.value
+            this.referer = mainUrl
+            this.headers = ua
+        })
+        return true
     }
 }
