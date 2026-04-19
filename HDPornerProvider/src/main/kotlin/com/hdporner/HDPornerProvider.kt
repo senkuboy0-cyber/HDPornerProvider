@@ -68,32 +68,39 @@ class HDPornerProvider : MainAPI() {
         val title = doc.selectFirst("h1")?.text()?.trim() ?: doc.title().trim()
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
         val description = doc.selectFirst("meta[name=description]")?.attr("content")
-        
-        // Get iframe source for video
-        val iframeSrc = doc.selectFirst("iframe")?.attr("src") ?: ""
-        
-        return newMovieLoadResponse(title, url, TvType.Movie, iframeSrc) {
+        val embedUrl = doc.select("iframe[src]")
+            .map { it.attr("src") }
+            .firstOrNull {
+                it.contains("pornkx") || it.contains("minochinos") ||
+                it.contains("dood") || it.contains("streamtape") ||
+                it.contains("filemoon") || it.contains("vidhide")
+            } ?: doc.selectFirst("iframe")?.attr("src") ?: ""
+        return newMovieLoadResponse(title, url, TvType.Movie, embedUrl.ifBlank { url }) {
             this.posterUrl = poster
             this.plot = description
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        if (data.isBlank() || !data.startsWith("http")) return false
-        
-        val quality = when {
-            data.contains("1080") -> Qualities.P1080.value
-            data.contains("720") -> Qualities.P720.value
-            data.contains("480") -> Qualities.P480.value
-            else -> Qualities.Unknown.value
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (data.isBlank()) return false
+        if (data.contains("pornkx") || data.contains("minochinos")) {
+            val html = app.get(data, headers = ua).text
+            val hjkMatch = Regex("""[A-Za-z0-9+/=_\-]+\|(\d+)\|hjkrhuihghfvu\|([A-Za-z0-9+/=_\-]+)""")
+                .find(html) ?: return false
+            val fileId = Regex("""file_id['"]\s*,\s*['"](\d+)['"]""")
+                .find(html)?.groupValues?.get(1) ?: return false
+            val m3u8Url = "https://minochinos.com/stream/${hjkMatch.groupValues[2]}/hjkrhuihghfvu/${hjkMatch.groupValues[1]}/$fileId/master.m3u8"
+            callback(newExtractorLink(name, name, m3u8Url, ExtractorLinkType.M3U8) {
+                this.quality = Qualities.P1080.value
+                this.referer = data
+            })
+            return true
         }
-        
-        callback(
-            newExtractorLink(name, "$name [HD]", data, ExtractorLinkType.VIDEO) {
-                this.quality = quality
-                this.headers = ua + mapOf("Referer" to mainUrl)
-            }
-        )
-        return true
+        return loadExtractor(data, subtitleCallback = subtitleCallback, callback = callback)
     }
 }
